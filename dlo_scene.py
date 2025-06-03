@@ -2,6 +2,7 @@ import argparse
 import numpy as np
 import genesis as gs
 from genesis.engine.entities import RigidEntity, MPMEntity
+from genesis.vis import camera
 from numpy.typing import NDArray
 from typing import Tuple
 from scipy.spatial.transform import Rotation as R
@@ -75,6 +76,14 @@ def compute_pose_from_paticle_index(particles: NDArray, particle_index: int, sce
     return pos, quaternion
 
 
+def step(scene: gs.Scene, cam, track: bool=True, link=None):
+    """
+    Step the scene and update the camera.
+    """
+    scene.step()
+    if track:
+        ee_pos = link.get_pos().cpu().numpy()
+        cam.set_pose(pos=ee_pos, lookat=[ee_pos[0], ee_pos[1], 0.0])
 
 
 
@@ -193,11 +202,12 @@ def main():
 
     qpos = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785, 0.04, 0.04])
     franka.set_qpos(qpos)
-    scene.step()
+    end_effector = franka.get_link("hand")
+    step(scene, cam, link=end_effector)
 
 
     while True:
-
+        
         particles = rope.get_particles()
         # only get every n-th particle, otherwise vectors dont follow rope shape
         print(f"Number of particles before downsampling: {len(particles)}")
@@ -208,7 +218,6 @@ def main():
         target_pos, target_quat = compute_pose_from_paticle_index(particles, idx, scene)
         print(f"Idx: {idx}, Target position: {target_pos}, Target quaternion: {target_quat}")
 
-        end_effector = franka.get_link("hand")
 
         # move to pre-grasp pose
         qpos = franka.inverse_kinematics(
@@ -228,7 +237,7 @@ def main():
 
 
         while np.linalg.norm(franka.get_qpos().cpu().numpy() - qpos.cpu().numpy()) > 0.02:
-            scene.step()
+            step(scene, cam, link=end_effector)
 
 
         ### GRASP ###
@@ -238,7 +247,7 @@ def main():
         franka.control_dofs_force(target_force, fingers_dof)
         
         for i in range(200):
-            scene.step()
+            step(scene, cam, link=end_effector)
 
 
         ### MOVE ###
@@ -258,7 +267,7 @@ def main():
         franka.control_dofs_position(qpos, [*motors_dof, *fingers_dof])
 
         while np.linalg.norm(franka.get_qpos().cpu().numpy() - qpos.cpu().numpy()) > 0.02:
-            scene.step()
+            step(scene, cam, link=end_effector)
 
         ### RELEASE ###
         qpos[-2:] = 0.2
@@ -266,7 +275,7 @@ def main():
         franka.control_dofs_position(qpos[-2:], fingers_dof)
         
         for i in range(200):
-            scene.step()
+            step(scene, cam, link=end_effector)
 
 
         ### LIFT ###
@@ -280,7 +289,8 @@ def main():
         franka.control_dofs_position(qpos, [*motors_dof, *fingers_dof])
 
         while np.linalg.norm(franka.get_qpos().cpu().numpy() - qpos.cpu().numpy()) > 0.02:
-            scene.step()
+            franka.control_dofs_position(qpos, [*motors_dof, *fingers_dof])
+            step(scene, cam, link=end_effector)
 
 
 
