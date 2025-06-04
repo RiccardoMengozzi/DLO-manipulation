@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 import genesis as gs
 from genesis.engine.entities import RigidEntity, MPMEntity
-from genesis.vis import camera
+from genesis.engine.entities.rigid_entity import RigidLink
 from numpy.typing import NDArray
 from typing import Tuple
 from scipy.spatial.transform import Rotation as R
@@ -128,7 +128,7 @@ def step(
     scene.step(update_visualizer=render)
     if draw_skeleton_frames:
         assert rope is not None, "Rope entity must be provided to draw skeleton frames."
-        particles = sample_skeleton_indices(
+        particles = sample_skeleton_particles(
             rope.get_particles(), NUMBER_OF_PARTICLES, PARTICLES_NUMBER_FOR_POS_SMOOTHING
         )
         draw_skeleton(particles, scene)
@@ -146,7 +146,7 @@ def step(
         print(f"Real-time factor: {real_time_factor:.4f}x")
 
 
-def sample_skeleton_indices(
+def sample_skeleton_particles(
     particles: NDArray[np.float32],
     downsample_number: int,
     average_number: int
@@ -213,7 +213,6 @@ def main():
     gs.init(backend=gs.cpu if args.cpu else gs.gpu)
 
     ########################## create a scene ##########################
-
     scene: gs.Scene = gs.Scene(
         sim_options=gs.options.SimOptions(
             dt=DT,
@@ -283,7 +282,7 @@ def main():
     franka: RigidEntity = scene.add_entity(
         gs.morphs.MJCF(
             file="xml/franka_emika_panda/panda.xml",
-            pos=(0.0, 0.0, HEIGHT_OFFSET),
+            pos=(-0.2, 0.2, HEIGHT_OFFSET),
         ),
         material=gs.materials.Rigid(
             friction=2.0,
@@ -312,12 +311,15 @@ def main():
     )
 
 
-
-    while True:
+    observations = []
+    actions = []
+    episode_ends = [] # One past the last step of the episode
+    steps_counter = 0
+    for i in range(1):
         # Set franka to initial position
         qpos = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785, 0.04, 0.04])
         franka.set_qpos(qpos)
-        end_effector = franka.get_link("hand")
+        end_effector : RigidLink = franka.get_link("hand")
 
         # Reset rope position with some random noise
         rope.set_position(
@@ -332,7 +334,7 @@ def main():
 
         # Create the rope skeleton
         particles = rope.get_particles()
-        particles = sample_skeleton_indices(
+        particles = sample_skeleton_particles(
             particles, NUMBER_OF_PARTICLES, PARTICLES_NUMBER_FOR_POS_SMOOTHING
         )
 
@@ -369,8 +371,17 @@ def main():
             qpos_goal=qpos,
             num_waypoints=int(path_time / DT),
         )
+        
 
         for i, waypoint in enumerate(path):
+            steps_counter += 1
+            observation_ee = end_effector.get_pos()[:2].cpu().numpy()
+            observation_dlo = sample_skeleton_particles(
+                rope.get_particles(), NUMBER_OF_PARTICLES, PARTICLES_NUMBER_FOR_POS_SMOOTHING
+            )[:, :2]
+            obs = np.vstack([observation_ee[None, :], observation_dlo])
+            observations.append(obs)
+
             franka.control_dofs_position(waypoint, [*motors_dof, *fingers_dof])
             step(
                 scene,
@@ -380,18 +391,18 @@ def main():
                 render_interval=10,
                 current_step=i + 1,
                 draw_skeleton_frames=False,
-                show_real_time_factor=True,
+                show_real_time_factor=False,
             )
+            action = end_effector.get_pos()[:2].cpu().numpy()
+            actions.append(action)
+        episode_ends.append(steps_counter)
 
         print("Reached target position, stopping.")
-        # Wait for state to stabilize
-        for i in range(100):
-            step(
-                scene,
-                cam,
-                gui=args.gui,
-                rope=rope,
-                draw_skeleton_frames=False,
-            )
+    # Save observations and actions
+    observations = np.array(observations)
+    actions = np.array(actions)
+    np.savez("pushing_dataset.npz", observations=observations, actions=actions, episode_ends=episode_ends)
+    print(f"Saved dataset with {len(observations)} observations and actions.")
+
 if __name__ == "__main__":
     main()

@@ -289,7 +289,6 @@ def main():
         franka.control_dofs_position(qpos, [*motors_dof, *fingers_dof])
 
         while np.linalg.norm(franka.get_qpos().cpu().numpy() - qpos.cpu().numpy()) > 0.02:
-            franka.control_dofs_position(qpos, [*motors_dof, *fingers_dof])
             step(scene, cam, link=end_effector)
 
 
