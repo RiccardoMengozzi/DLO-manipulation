@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 from typing import Tuple
 from scipy.spatial.transform import Rotation as R
 import time
+from tqdm import tqdm
 
 
 np.set_printoptions(
@@ -21,12 +22,14 @@ np.set_printoptions(
     },
 )
 
+NUMBER_OF_EPISODES = 3
+ACTION_TIME = 2.56 # seconds (for 256 batch size)
 DT = 1e-2  # simulation time step
 MPM_GRID_DENSITY = 256
 SUBSTEPS = 40
 TABLE_HEIGHT = 0.7005
 HEIGHT_OFFSET = TABLE_HEIGHT
-EE_OFFSET = 0.115
+EE_OFFSET = 0.122
 EE_QUAT_ROTATION = np.array([0, 0, -1, 0])
 ROPE_LENGTH = 0.2
 ROPE_RADIUS = 0.003
@@ -207,10 +210,16 @@ def main():
     parser.add_argument("-g", "--gui", action="store_true", default=False)
     parser.add_argument("-c", "--cpu", action="store_true", default=False)
     parser.add_argument("-f", "--show_fps", action="store_true", default=False)
+    parser.add_argument(
+        "-n", "--n_episodes", type=int, default=NUMBER_OF_EPISODES,
+        help="Number of episodes to run. Default is 3."
+    )
     args = parser.parse_args()
 
     ########################## init ##########################
-    gs.init(backend=gs.cpu if args.cpu else gs.gpu)
+    gs.init(backend=gs.cpu if args.cpu else gs.gpu,
+            logging_level="error",
+            )
 
     ########################## create a scene ##########################
     scene: gs.Scene = gs.Scene(
@@ -227,12 +236,12 @@ def main():
             max_FPS=240,
         ),
         vis_options=gs.options.VisOptions(
-            visualize_mpm_boundary=False,
+            visualize_mpm_boundary=True,
             show_world_frame=True,
         ),
         mpm_options=gs.options.MPMOptions(
             lower_bound=(0.2, -0.3, HEIGHT_OFFSET - 0.05),
-            upper_bound=(0.6, 0.3, HEIGHT_OFFSET + 0.1),
+            upper_bound=(0.8, 0.3, HEIGHT_OFFSET + 0.1),
             grid_density=MPM_GRID_DENSITY,
         ),
         show_FPS=args.show_fps,
@@ -282,7 +291,7 @@ def main():
     franka: RigidEntity = scene.add_entity(
         gs.morphs.MJCF(
             file="xml/franka_emika_panda/panda.xml",
-            pos=(-0.2, 0.2, HEIGHT_OFFSET),
+            pos=(0.0, 0.0, HEIGHT_OFFSET),
         ),
         material=gs.materials.Rigid(
             friction=2.0,
@@ -315,7 +324,7 @@ def main():
     actions = []
     episode_ends = [] # One past the last step of the episode
     steps_counter = 0
-    for i in range(1):
+    for i in tqdm(range(args.n_episodes)):
         # Set franka to initial position
         qpos = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785, 0.04, 0.04])
         franka.set_qpos(qpos)
@@ -342,9 +351,6 @@ def main():
         idx = len(particles) // 2  # middle particle
         target_pos, target_quat = compute_pose_from_paticle_index(particles, idx)
         target_pos += np.array([-0.05 + np.random.uniform(low=-0.01, high=0.01), 0.0, 0.0])
-        print(
-            f"Idx: {idx}, Target position: {target_pos}, Target quaternion: {target_quat}"
-        )
 
         # move to pre action position
         qpos = franka.inverse_kinematics(
@@ -357,7 +363,7 @@ def main():
         step(scene, cam, link=end_effector)
 
         # Set movement goal 
-        target_pos += np.array([0.1 + np.random.uniform(low=-0.05, high=0.05), 0.0, 0.0])
+        target_pos += np.array([0.15 + np.random.uniform(low=-0.05, high=0.05), 0.0, 0.0])
 
         qpos = franka.inverse_kinematics(
             link=end_effector,
@@ -366,13 +372,12 @@ def main():
         )
         qpos[-2:] = 0.0
 
-        path_time = 2.0  # secs
+        path_time = ACTION_TIME  # secs
         path = franka.plan_path(
             qpos_goal=qpos,
             num_waypoints=int(path_time / DT),
         )
         
-
         for i, waypoint in enumerate(path):
             steps_counter += 1
             observation_ee = end_effector.get_pos()[:2].cpu().numpy()
@@ -397,7 +402,6 @@ def main():
             actions.append(action)
         episode_ends.append(steps_counter)
 
-        print("Reached target position, stopping.")
     # Save observations and actions
     observations = np.array(observations)
     actions = np.array(actions)
