@@ -23,7 +23,7 @@ np.set_printoptions(
 )
 
 NUMBER_OF_EPISODES = 3
-ACTION_TIME = 2.56 # seconds (for 256 batch size)
+ACTION_TIME = 2.0 # seconds (for 256 batch size)
 DT = 1e-2  # simulation time step
 MPM_GRID_DENSITY = 256
 SUBSTEPS = 40
@@ -214,6 +214,8 @@ def main():
         "-n", "--n_episodes", type=int, default=NUMBER_OF_EPISODES,
         help="Number of episodes to run. Default is 3."
     )
+    parser.add_argument("-l", "--episode_length", type=int, default=10)
+    
     args = parser.parse_args()
 
     ########################## init ##########################
@@ -379,13 +381,14 @@ def main():
         )
         
         for i, waypoint in enumerate(path):
-            steps_counter += 1
-            observation_ee = end_effector.get_pos()[:2].cpu().numpy()
-            observation_dlo = sample_skeleton_particles(
-                rope.get_particles(), NUMBER_OF_PARTICLES, PARTICLES_NUMBER_FOR_POS_SMOOTHING
-            )[:, :2]
-            obs = np.vstack([observation_ee[None, :], observation_dlo])
-            observations.append(obs)
+            if i % int(len(path) // args.episode_length) == 0:
+                steps_counter += 1
+                observation_ee = end_effector.get_pos()[:2].cpu().numpy()
+                observation_dlo = sample_skeleton_particles(
+                    rope.get_particles(), NUMBER_OF_PARTICLES, PARTICLES_NUMBER_FOR_POS_SMOOTHING
+                )[:, :2]
+                obs = np.vstack([observation_ee[None, :], observation_dlo])
+                observations.append(obs)
 
             franka.control_dofs_position(waypoint, [*motors_dof, *fingers_dof])
             step(
@@ -393,13 +396,14 @@ def main():
                 cam,
                 gui=args.gui,
                 rope=rope,
-                render_interval=10,
+                render_interval=1,
                 current_step=i + 1,
                 draw_skeleton_frames=False,
                 show_real_time_factor=False,
             )
-            action = end_effector.get_pos()[:2].cpu().numpy()
-            actions.append(action)
+            if i % int(len(path) // args.episode_length) == 0:
+                action = end_effector.get_pos()[:2].cpu().numpy()
+                actions.append(action)
         episode_ends.append(steps_counter)
 
     # Save observations and actions
